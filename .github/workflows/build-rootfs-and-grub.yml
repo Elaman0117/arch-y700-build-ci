@@ -1,0 +1,335 @@
+name: Build Arch Y700 RootFS And GRUB
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to create/upload. Empty disables release upload.
+        required: false
+        type: string
+      output_prefix:
+        description: Output artifact prefix
+        required: true
+        default: arch-y700-armv8
+        type: string
+      rootfs_config:
+        description: Rootfs config as KEY=value lines
+        required: true
+        type: string
+        default: |
+          ARCH=aarch64
+          ROOTFS_TARBALL_URL=http://os.archlinuxarm.org/os/ArchLinuxARM-armv8-latest.tar.gz
+          PACMAN_MIRROR=http://mirror.archlinuxarm.org
+          ARCH_LINUXARM_REPO=$repo/$arch
+          ROOTFS_IMAGE_SIZE=20G
+          ROOTFS_FSTYPE=f2fs
+          ROOTFS_F2FS_OPTIONS=-O extra_attr,inode_checksum,sb_checksum,compression
+          ROOTFS_UUID=
+          ROOTFS_LABEL=Y700ARCH
+          ROOTFS_PARTLABEL=userdata
+          HOSTNAME_NAME=y700
+          DEFAULT_USER_NAME=y700
+          DEFAULT_USER_PASSWORD=1234
+          ROOT_PASSWORD_MODE=locked
+          ROOT_PASSWORD=
+          USER_SUDO_MODE=password
+          TZ_REGION=Asia/Shanghai
+          LANG_NAME=zh_CN.UTF-8
+          LOCALES=en_US.UTF-8 UTF-8
+          PACKAGE_LIST=
+          DESKTOP_ENV=plasma-desktop sddm
+          OVERLAY_ARCHIVE=
+          PKG_ARCHIVE=
+          BUILD_Y700_SENSOR_STAGE=1
+          SENSOR_SOURCE_ARCHIVE=
+          SENSOR_BASELINE_OVERLAY_ARCHIVE=
+          SENSOR_STAGE_VERSION=20260626.1
+          SENSOR_STRIP=1
+          BUILD_TB321FU_HAPTICS_STAGE=1
+          HAPTICS_SOURCE_ARCHIVE=
+          KERNEL_SOURCE_ARCHIVE=
+          KERNEL_BUILD_ARCHIVE=
+          HAPTICS_STAGE_VERSION=20260627.1
+          HAPTICS_STRIP=1
+          BUILD_TB321FU_CAMERA_STACK=1
+          CAMERA_STACK_ARCHIVE=
+          CAMERA_STACK_STAGE_VERSION=20260627.4
+          BUILD_TB321FU_GPU_SENSOR=1
+          TB321FU_GPU_SENSOR_BUILD_JOBS=2
+          INSTALL_GNOME_SNAPSHOT=1
+          APPLY_Y700_FIRMWARE_FIXES=1
+          APPLY_Y700_AUDIO_POLICY_FIXES=1
+          MKINITCPIO_PRESETS=default
+          MKINITCPIO_MODULES=f2fs ext4 qcom_qmp_phy qcom_snps_femto_v2
+          MKINITCPIO_HOOKS=base udev block autodetect keyboard keymap modconf filesystems fsck
+          CLEAN_PACMAN_CACHE=1
+          COMPRESS=7z
+          CHUNK_SIZE=1500m
+          KEEP_RAW_IMAGE=0
+      boot_config:
+        description: GRUB/FAT boot image config as KEY=value lines
+        required: true
+        type: string
+        default: |
+          BOOT_IMAGE_SIZE=512M
+          BOOT_FAT_BITS=32
+          BOOT_FAT_LABEL=Y700GRUB
+          BOOT_SECTOR_SIZE=512
+          BOOT_CLUSTER_SECTORS=
+          BOOT_PARTLABEL=ESP
+          ROOT_SELECTOR=partlabel
+          ROOT_PARTLABEL=userdata
+          ROOT_UUID=
+          ROOTARGS=
+          ROOTARGS_EXTRA=
+          STABLEARGS=drm_client_lib.active=none
+          GRUB_TIMEOUT=3
+          INCLUDE_FALLBACK_KERNEL=1
+          FALLBACK_KERNEL_VERSION=
+          BOOT_COMPRESS=7z
+          BOOT_CHUNK_SIZE=1500m
+          KEEP_BOOT_IMAGE=0
+      source_config:
+        description: Input artifact URLs as KEY=value lines
+        required: true
+        type: string
+        default: |
+          KERNEL_ARTIFACT_ARCHIVE=
+          BOOTAA64_EFI_URL=
+          QCOMRAMP_EFI_URL=
+          QCOMRAMP_CFG_NAME=qcomramp.cfg
+          GRUB_BUILD_ARCHIVE=
+          DTB_NAME=sm8650-lenovo-tb321fu.dtb
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            dosfstools mtools f2fs-tools rsync curl unzip tar xz-utils zstd p7zip-full \
+            gdisk qemu-utils sudo ca-certificates gnupg binutils \
+            meson ninja-build pkg-config protobuf-c-compiler gcc-aarch64-linux-gnu \
+            libglib2.0-dev:arm64 libqmi-glib-dev:arm64 libgudev-1.0-dev:arm64 libpolkit-gobject-1-dev:arm64 libprotobuf-c-dev:arm64 \
+            arch-install-scripts
+
+      - name: Apply workflow configuration
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/rootfs.env" <<'CONFIG_EOF'
+          ${{ inputs.rootfs_config }}
+          CONFIG_EOF
+          cat > "$RUNNER_TEMP/boot.env" <<'CONFIG_EOF'
+          ${{ inputs.boot_config }}
+          CONFIG_EOF
+          cat > "$RUNNER_TEMP/source.env" <<'CONFIG_EOF'
+          ${{ inputs.source_config }}
+          CONFIG_EOF
+          sed -i 's/^          //' "$RUNNER_TEMP/rootfs.env" "$RUNNER_TEMP/boot.env" "$RUNNER_TEMP/source.env"
+          scripts/ci/apply-workflow-config.sh "$RUNNER_TEMP/rootfs.env"
+          scripts/ci/apply-workflow-config.sh "$RUNNER_TEMP/boot.env"
+          scripts/ci/apply-workflow-config.sh "$RUNNER_TEMP/source.env"
+          {
+            echo 'OUTPUT_DIR_ROOTFS=out/ci-rootfs'
+            echo 'OUTPUT_DIR_GRUB=out/ci-grub'
+            echo 'OUTPUT_PREFIX<<EOF_OUTPUT_PREFIX'
+            echo '${{ inputs.output_prefix }}'
+            echo 'EOF_OUTPUT_PREFIX'
+          } >> "$GITHUB_ENV"
+
+      - name: Prepare GRUB build input
+        run: |
+          set -euo pipefail
+          if [ -n "${GRUB_BUILD_ARCHIVE:-}" ]; then
+            mkdir -p "$RUNNER_TEMP/grub-build"
+            curl -fL --retry 3 -o "$RUNNER_TEMP/grub-build.tar" "$GRUB_BUILD_ARCHIVE"
+            if ! tar -C "$RUNNER_TEMP/grub-build" -xf "$RUNNER_TEMP/grub-build.tar"; then
+              tar -C "$RUNNER_TEMP/grub-build" -xzf "$RUNNER_TEMP/grub-build.tar"
+            fi
+            found=$(find "$RUNNER_TEMP/grub-build" -type f -name grub-mkstandalone -perm -111 | head -n1)
+            test -n "$found"
+            echo "Y700_GRUB_BUILD_DIR=$(dirname "$found")" >> "$GITHUB_ENV"
+          elif [ -n "${QCOMRAMP_EFI_URL:-}" ]; then
+            echo 'Y700_GRUB_BUILD_DIR=' >> "$GITHUB_ENV"
+            echo 'Using prebuilt QCOMRAMP_EFI_URL; skipping grub-mkstandalone input.'
+          else
+            echo 'Either GRUB_BUILD_ARCHIVE or QCOMRAMP_EFI_URL must be set.' >&2
+            exit 1
+          fi
+
+      - name: Build source sensor stage
+        run: |
+          set -euo pipefail
+          if [ "${BUILD_Y700_SENSOR_STAGE:-0}" != "1" ]; then
+            echo 'BUILD_Y700_SENSOR_STAGE is not 1; skipping.'
+            echo 'SENSOR_STAGE_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ -z "${SENSOR_SOURCE_ARCHIVE:-}" ] && [ -z "${SENSOR_SOURCE_DIR:-}" ]; then
+            echo 'No SENSOR_SOURCE_ARCHIVE/SENSOR_SOURCE_DIR provided; skipping source sensor stage build.'
+            echo 'SENSOR_STAGE_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ -z "${SENSOR_BASELINE_OVERLAY_ARCHIVE:-}" ] && [ -z "${SENSOR_BASELINE_OVERLAY_DIR:-}" ]; then
+            echo 'No SENSOR_BASELINE_OVERLAY_ARCHIVE/SENSOR_BASELINE_OVERLAY_DIR provided; skipping source sensor stage build.'
+            echo 'SENSOR_STAGE_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          env OUTPUT_DIR="out/y700-sensor-stage" \
+            ARCH="${ARCH:-aarch64}" \
+            SENSOR_STAGE_VERSION="${SENSOR_STAGE_VERSION:-20260626.1}" \
+            SENSOR_SOURCE_ARCHIVE="${SENSOR_SOURCE_ARCHIVE:-}" \
+            SENSOR_SOURCE_DIR="${SENSOR_SOURCE_DIR:-}" \
+            SENSOR_BASELINE_OVERLAY_ARCHIVE="${SENSOR_BASELINE_OVERLAY_ARCHIVE:-}" \
+            SENSOR_BASELINE_OVERLAY_DIR="${SENSOR_BASELINE_OVERLAY_DIR:-}" \
+            SENSOR_STRIP="${SENSOR_STRIP:-1}" \
+            bash scripts/ci/build-y700-sensor-stage.sh
+          echo 'SENSOR_STAGE_DIR=out/y700-sensor-stage' >> "$GITHUB_ENV"
+
+      - name: Build source haptics stage
+        run: |
+          set -euo pipefail
+          if [ "${BUILD_TB321FU_HAPTICS_STAGE:-0}" != "1" ]; then
+            echo 'BUILD_TB321FU_HAPTICS_STAGE is not 1; skipping.'
+            echo 'HAPTICS_STAGE_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ -z "${HAPTICS_SOURCE_ARCHIVE:-}" ] && [ -z "${HAPTICS_SOURCE_DIR:-}" ]; then
+            echo 'No HAPTICS_SOURCE_ARCHIVE/HAPTICS_SOURCE_DIR provided; skipping haptics stage build.'
+            echo 'HAPTICS_STAGE_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ -z "${KERNEL_SOURCE_ARCHIVE:-}" ] && [ -z "${KERNEL_SOURCE_DIR:-}" ]; then
+            echo 'No KERNEL_SOURCE_ARCHIVE/KERNEL_SOURCE_DIR provided; skipping haptics stage build.'
+            echo 'HAPTICS_STAGE_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ -z "${KERNEL_BUILD_ARCHIVE:-}" ] && [ -z "${KERNEL_BUILD_DIR:-}" ]; then
+            echo 'No KERNEL_BUILD_ARCHIVE/KERNEL_BUILD_DIR provided; skipping haptics stage build.'
+            echo 'HAPTICS_STAGE_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          env OUTPUT_DIR="out/tb321fu-haptics-stage" \
+            ARCH="${ARCH:-aarch64}" \
+            HAPTICS_STAGE_VERSION="${HAPTICS_STAGE_VERSION:-20260627.1}" \
+            HAPTICS_SOURCE_ARCHIVE="${HAPTICS_SOURCE_ARCHIVE:-}" \
+            HAPTICS_SOURCE_DIR="${HAPTICS_SOURCE_DIR:-}" \
+            KERNEL_SOURCE_ARCHIVE="${KERNEL_SOURCE_ARCHIVE:-}" \
+            KERNEL_SOURCE_DIR="${KERNEL_SOURCE_DIR:-}" \
+            KERNEL_BUILD_ARCHIVE="${KERNEL_BUILD_ARCHIVE:-}" \
+            KERNEL_BUILD_DIR="${KERNEL_BUILD_DIR:-}" \
+            HAPTICS_STRIP="${HAPTICS_STRIP:-1}" \
+            bash scripts/ci/build-tb321fu-haptics-stage.sh
+          echo 'HAPTICS_STAGE_DIR=out/tb321fu-haptics-stage' >> "$GITHUB_ENV"
+
+      - name: Build verified camera stack stage
+        run: |
+          set -euo pipefail
+          if [ "${BUILD_TB321FU_CAMERA_STACK:-0}" != "1" ]; then
+            echo 'BUILD_TB321FU_CAMERA_STACK is not 1; skipping.'
+            echo 'CAMERA_STACK_STAGE_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          env OUTPUT_DIR="out/tb321fu-camera-stack-stage" \
+            ARCH="${ARCH:-aarch64}" \
+            CAMERA_STACK_STAGE_VERSION="${CAMERA_STACK_STAGE_VERSION:-20260627.4}" \
+            CAMERA_STACK_ARCHIVE="${CAMERA_STACK_ARCHIVE:-}" \
+            CAMERA_STACK_DIR="${CAMERA_STACK_DIR:-}" \
+            bash scripts/ci/build-tb321fu-camera-stack-stage.sh
+          echo 'CAMERA_STACK_STAGE_DIR=out/tb321fu-camera-stack-stage' >> "$GITHUB_ENV"
+
+      - name: Build rootfs image
+        run: |
+          set -euo pipefail
+          sudo --preserve-env=OUTPUT_PREFIX,ARCH,ROOTFS_TARBALL_URL,ROOTFS_TARBALL_PATH,PACMAN_MIRROR,ARCH_LINUXARM_REPO,ROOTFS_IMAGE_SIZE,ROOTFS_FSTYPE,ROOTFS_F2FS_OPTIONS,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,OVERLAY_DIR,PKG_ARCHIVE,PKG_DIR,SENSOR_STAGE_DIR,HAPTICS_STAGE_DIR,CAMERA_STACK_STAGE_DIR,BUILD_TB321FU_GPU_SENSOR,TB321FU_GPU_SENSOR_SOURCE_DIR,TB321FU_GPU_SENSOR_BUILD_JOBS,INSTALL_GNOME_SNAPSHOT,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,MKINITCPIO_PRESETS,MKINITCPIO_MODULES,MKINITCPIO_HOOKS,CLEAN_PACMAN_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
+            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_STAGE_DIR="${SENSOR_STAGE_DIR:-}" HAPTICS_STAGE_DIR="${HAPTICS_STAGE_DIR:-}" CAMERA_STACK_STAGE_DIR="${CAMERA_STACK_STAGE_DIR:-}" bash scripts/ci/build-rootfs-image.sh
+          sudo chown -R "$USER:$USER" out
+
+      - name: Build GRUB boot image
+        run: |
+          set -euo pipefail
+          env OUTPUT_DIR="$OUTPUT_DIR_GRUB" \
+            OUTPUT_PREFIX="$OUTPUT_PREFIX" \
+            BOOT_IMAGE_SIZE="$BOOT_IMAGE_SIZE" \
+            BOOT_FAT_BITS="$BOOT_FAT_BITS" \
+            BOOT_FAT_LABEL="$BOOT_FAT_LABEL" \
+            BOOT_SECTOR_SIZE="$BOOT_SECTOR_SIZE" \
+            BOOT_CLUSTER_SECTORS="$BOOT_CLUSTER_SECTORS" \
+            BOOT_PARTLABEL="$BOOT_PARTLABEL" \
+            KERNEL_ARTIFACT_ARCHIVE="$KERNEL_ARTIFACT_ARCHIVE" \
+            BOOTAA64_EFI_URL="$BOOTAA64_EFI_URL" \
+            QCOMRAMP_EFI_URL="$QCOMRAMP_EFI_URL" \
+            QCOMRAMP_CFG_NAME="$QCOMRAMP_CFG_NAME" \
+            DTB_NAME="$DTB_NAME" \
+            ROOT_SELECTOR="$ROOT_SELECTOR" \
+            ROOT_PARTLABEL="$ROOT_PARTLABEL" \
+            ROOT_UUID="$ROOT_UUID" \
+            ROOTARGS="$ROOTARGS" \
+            ROOTARGS_EXTRA="$ROOTARGS_EXTRA" \
+            STABLEARGS="$STABLEARGS" \
+            GRUB_TIMEOUT="$GRUB_TIMEOUT" \
+            INCLUDE_FALLBACK_KERNEL="$INCLUDE_FALLBACK_KERNEL" \
+            FALLBACK_KERNEL_VERSION="$FALLBACK_KERNEL_VERSION" \
+            BOOT_COMPRESS="$BOOT_COMPRESS" \
+            BOOT_CHUNK_SIZE="$BOOT_CHUNK_SIZE" \
+            KEEP_BOOT_IMAGE="$KEEP_BOOT_IMAGE" \
+            Y700_GRUB_BUILD_DIR="$Y700_GRUB_BUILD_DIR" \
+            ROOTFS_IMAGE="out/ci-rootfs/${OUTPUT_PREFIX}-rootfs.img" \
+            bash scripts/ci/build-grub-image.sh
+
+      - name: Write combined checksums
+        run: |
+          set -euo pipefail
+          mkdir -p out/ci-release
+          checksum_dirs=("$OUTPUT_DIR_ROOTFS" "$OUTPUT_DIR_GRUB")
+          if [ -d out/y700-sensor-stage ]; then
+            checksum_dirs+=(out/y700-sensor-stage)
+          fi
+          if [ -d out/tb321fu-haptics-stage ]; then
+            checksum_dirs+=(out/tb321fu-haptics-stage)
+          fi
+          if [ -d out/tb321fu-camera-stack-stage ]; then
+            checksum_dirs+=(out/tb321fu-camera-stack-stage)
+          fi
+          find "${checksum_dirs[@]}" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > out/ci-release/SHA256SUMS.txt
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.output_prefix }}-rootfs-grub
+          path: |
+            out/ci-rootfs/*
+            out/ci-grub/*
+            out/y700-sensor-stage/*
+            out/tb321fu-haptics-stage/*
+            out/tb321fu-camera-stack-stage/*
+            out/ci-release/SHA256SUMS.txt
+
+      - name: Upload release assets
+        if: ${{ inputs.release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --prerelease --title "$RELEASE_TAG"
+          release_assets=(out/ci-rootfs/* out/ci-grub/* out/ci-release/SHA256SUMS.txt)
+          if compgen -G 'out/y700-sensor-stage/*' >/dev/null; then
+            release_assets+=(out/y700-sensor-stage/*)
+          fi
+          if compgen -G 'out/tb321fu-haptics-stage/*' >/dev/null; then
+            release_assets+=(out/tb321fu-haptics-stage/*)
+          fi
+          if compgen -G 'out/tb321fu-camera-stack-stage/*' >/dev/null; then
+            release_assets+=(out/tb321fu-camera-stack-stage/*)
+          fi
+          gh release upload "$RELEASE_TAG" "${release_assets[@]}" --clobber

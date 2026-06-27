@@ -1,0 +1,10 @@
+out/
+*.img
+*.img.7z
+*.img.zst
+*.img.xz
+*.tar.gz
+*.tar.zst
+.tmp/
+*.tmp
+worklog.md
