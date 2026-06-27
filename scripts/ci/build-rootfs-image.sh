@@ -326,12 +326,14 @@ GPU_SENSOR_BUILD
 cleanup() {
   set +e
   if [ "$mounted" = 1 ]; then
+    # Kill any processes still running inside the chroot before unmounting.
+    fuser -k "$rootfs_dir" 2>/dev/null || true
     for p in dev/pts dev proc sys run; do
-      mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p"
+      mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p" 2>/dev/null
     done
-    mountpoint -q "$rootfs_dir" && umount "$rootfs_dir"
+    mountpoint -q "$rootfs_dir" && umount -l "$rootfs_dir" 2>/dev/null
   fi
-  rm -rf "$work_dir"
+  rm -rf "$work_dir" 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -487,7 +489,8 @@ chmod 0644 /etc/skel/.config/kwinoutputconfig.json
 # --- System services -------------------------------------------------------
 systemctl enable NetworkManager || true
 systemctl enable sshd || true
-systemctl enable sddm || true
+# sddm is only available when a desktop environment is installed.
+systemctl enable sddm 2>/dev/null || true
 
 # --- User / password / sudo ------------------------------------------------
 if ! id -u "$DEFAULT_USER_NAME" >/dev/null 2>&1; then
@@ -558,18 +561,42 @@ sed -i '/^127\.0\.1\.1\b/d' /etc/hosts
 printf '127.0.1.1 %s\n' "$HOSTNAME_NAME" >> /etc/hosts
 
 # --- mkinitcpio configuration ----------------------------------------------
-# Build an initramfs that can mount an F2FS root on Qualcomm SM8650.
-cat > /etc/mkinitcpio.conf.d/y700.conf <<MKINITCPIO_EOF
+# Build an initramfs that can mount the root filesystem on Qualcomm SM8650.
+# We rewrite /etc/mkinitcpio.conf directly because ALA's mkinitcpio may not
+# support the mkinitcpio.conf.d/ drop-in directory.
+mkdir -p /etc
+if [ -f /etc/mkinitcpio.conf ]; then
+  cp -a /etc/mkinitcpio.conf /etc/mkinitcpio.conf.orig
+fi
+cat > /etc/mkinitcpio.conf <<MKINITCPIO_EOF
 MODULES=($MKINITCPIO_MODULES)
 BINARIES=()
 FILES=()
 HOOKS=($MKINITCPIO_HOOKS)
 MKINITCPIO_EOF
-chmod 0644 /etc/mkinitcpio.conf.d/y700.conf
+chmod 0644 /etc/mkinitcpio.conf
 
-# Regenerate the initramfs for every installed preset.
+# Regenerate the initramfs for every installed kernel. We use -g + -k instead
+# of -p because the preset files may not be set up correctly in the chroot.
+for kver_dir in /usr/lib/modules/*; do
+  [ -d "$kver_dir" ] || continue
+  kver=$(basename "$kver_dir")
+  echo "==> Building initramfs for kernel $kver"
+  mkinitcpio -g /boot/initramfs-"$kver".img -k "$kver" -S autodetect 2>&1 || {
+    echo "WARNING: mkinitcpio -g failed for $kver, trying with autodetect" >&2
+    mkinitcpio -g /boot/initramfs-"$kver".img -k "$kver" 2>&1 || true
+  }
+  # Create the standard initramfs-linux.img symlink that GRUB expects.
+  case "$kver" in
+    linux-*) ln -sf "initramfs-$kver.img" /boot/initramfs-linux.img ;;
+  esac
+done
+
+# Also try the preset-based approach as a fallback.
 for preset in $MKINITCPIO_PRESETS; do
-  mkinitcpio -p "$preset"
+  if [ -f "/etc/mkinitcpio.d/$preset.preset" ]; then
+    mkinitcpio -p "$preset" 2>&1 || true
+  fi
 done
 
 # --- Stage-installed packages and overlays ---------------------------------
