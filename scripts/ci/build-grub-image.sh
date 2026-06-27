@@ -354,7 +354,7 @@ if [ -n "${rootfs_mount:-}" ] && mountpoint -q "$rootfs_mount" 2>/dev/null; then
     "$generated_rootargs" \
     "$STABLEARGS" \
     "$BOOT_PARTLABEL"
-  umount "$rootfs_mount"
+  umount -l "$rootfs_mount" 2>/dev/null || true
 fi
 
 # --- Checksums + compression ----------------------------------------------
