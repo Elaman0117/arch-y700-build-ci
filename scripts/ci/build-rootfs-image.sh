@@ -34,7 +34,7 @@ Environment inputs:
   OUTPUT_DIR                 default: out/ci-rootfs
   OUTPUT_PREFIX              default: arch-y700-armv8
   ARCH                       default: aarch64 (matches Arch Linux ARM armv8)
-  ROOTFS_TARBALL_URL         default: http://os.archlinuxarm.org/os/ArchLinuxARM-armv8-latest.tar.gz
+  ROOTFS_TARBALL_URL         default: https://archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
   ROOTFS_TARBALL_PATH        optional local path; overrides URL
   PACMAN_MIRROR              default: http://mirror.archlinuxarm.org
   ARCH_LINUXARM_REPO         default: \$arch/\$repo (ALA mirror path layout)
@@ -97,7 +97,7 @@ ci_require_cmd curl
 
 # --- Defaults ---------------------------------------------------------------
 ARCH=${ARCH:-aarch64}
-ROOTFS_TARBALL_URL=${ROOTFS_TARBALL_URL:-http://os.archlinuxarm.org/os/ArchLinuxARM-armv8-latest.tar.gz}
+ROOTFS_TARBALL_URL=${ROOTFS_TARBALL_URL:-https://archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz}
 ROOTFS_TARBALL_PATH=${ROOTFS_TARBALL_PATH:-}
 PACMAN_MIRROR=${PACMAN_MIRROR:-http://mirror.archlinuxarm.org}
 ARCH_LINUXARM_REPO=${ARCH_LINUXARM_REPO:-'$arch/$repo'}

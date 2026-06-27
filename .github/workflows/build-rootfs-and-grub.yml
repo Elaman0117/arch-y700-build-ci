@@ -18,7 +18,7 @@ on:
         type: string
         default: |
           ARCH=aarch64
-          ROOTFS_TARBALL_URL=http://os.archlinuxarm.org/os/ArchLinuxARM-armv8-latest.tar.gz
+          ROOTFS_TARBALL_URL=https://archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
           PACMAN_MIRROR=http://mirror.archlinuxarm.org
           ARCH_LINUXARM_REPO=$arch/$repo
           ROOTFS_IMAGE_SIZE=20G
