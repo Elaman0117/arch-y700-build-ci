@@ -1,0 +1,30 @@
+name: Diagnose X86 Runner F2FS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Kernel
+        run: uname -a
+      - name: F2FS support
+        run: |
+          set +e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq f2fs-tools >/dev/null 2>&1
+          echo "=== modprobe f2fs ==="
+          sudo modprobe f2fs 2>&1
+          echo "modprobe exit: $?"
+          echo ""
+          echo "=== /proc/filesystems ==="
+          grep f2fs /proc/filesystems || echo "f2fs NOT supported"
+          echo ""
+          echo "=== Test mkfs + mount ==="
+          truncate -s 256M /tmp/t.img
+          sudo mkfs.f2fs -f /tmp/t.img 2>&1 | tail -3
+          sudo mount -o loop /tmp/t.img /mnt 2>&1
+          echo "mount exit: $?"
+          sudo umount /mnt 2>/dev/null
+          rm -f /tmp/t.img
