@@ -766,10 +766,14 @@ ci_log "writing manifest"
 ( cd "$rootfs_dir" && find . -xdev -printf '%y\t%u\t%g\t%m\t%s\t%p\n' | sort ) > "$manifest"
 
 # --- Unmount, fsck ---------------------------------------------------------
+# Kill any processes still running inside the chroot (e.g. pacman's gpg-agent
+# or leftover dbus-daemon) before unmounting.
+fuser -k "$rootfs_dir" 2>/dev/null || true
+sleep 2
 for p in dev/pts dev proc sys run; do
-  mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p"
+  mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p" 2>/dev/null || true
 done
-umount "$rootfs_dir"
+umount -l "$rootfs_dir" 2>/dev/null || true
 mounted=0
 
 case "$ROOTFS_FSTYPE" in
