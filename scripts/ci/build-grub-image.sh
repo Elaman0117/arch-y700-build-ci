@@ -116,7 +116,9 @@ mkdir -p "$OUTPUT_DIR"
 work_dir=$(mktemp -d "$OUTPUT_DIR/.grub-build.XXXXXX")
 payload_dir="$work_dir/payload"
 mkdir -p "$payload_dir/EFI/BOOT" "$payload_dir/dtb" "$payload_dir/boot/grub"
-trap 'rm -rf "$work_dir"' EXIT
+# Cleanup trap: unmount rootfs if still mounted, then remove work dir.
+# Must use sudo because mount was done with sudo.
+trap 'sudo umount -l "$work_dir/rootfs-mount" 2>/dev/null || true; rm -rf "$work_dir" 2>/dev/null || sudo rm -rf "$work_dir" 2>/dev/null || true' EXIT
 
 # --- Resolve GRUB build dir ------------------------------------------------
 if [ -n "${GRUB_BUILD_ARCHIVE:-}" ]; then
@@ -180,8 +182,9 @@ if ci_bool "$INCLUDE_FALLBACK_KERNEL"; then
       mkdir -p "$rootfs_mount"
       # mount auto-detects ext4/f2fs; both work on runners that have the
       # corresponding kernel module. GitHub-hosted runners support ext4.
-      # Needs sudo for loop device setup.
-      sudo mount -o loop,ro "$ROOTFS_IMAGE" "$rootfs_mount"
+      # Needs sudo for loop device setup. Mount rw so we can write the
+      # inner grub.cfg into /boot/grub/ on the rootfs.
+      sudo mount -o loop "$ROOTFS_IMAGE" "$rootfs_mount"
       FALLBACK_KERNEL_PATH=${FALLBACK_KERNEL_PATH:-"$rootfs_mount/boot/vmlinuz-linux"}
       FALLBACK_INITRAMFS_PATH=${FALLBACK_INITRAMFS_PATH:-"$rootfs_mount/boot/initramfs-linux.img"}
       if [ -z "$FALLBACK_KERNEL_VERSION" ] && [ -f "$rootfs_mount/usr/lib/modules/"*/modules.dep ]; then
@@ -387,14 +390,16 @@ fi
 
 # --- If we mounted the rootfs image, write the inner grub.cfg now ----------
 if [ -n "${rootfs_mount:-}" ] && mountpoint -q "$rootfs_mount" 2>/dev/null; then
-  log "writing inner grub.cfg into F2FS rootfs"
-  mkdir -p "$rootfs_mount/boot/grub"
-  y700_write_inner_grub_cfg \
-    "$rootfs_mount/boot/grub/grub.cfg" \
+  log "writing inner grub.cfg into rootfs"
+  sudo mkdir -p "$rootfs_mount/boot/grub"
+  # Write to a temp file first (as normal user), then sudo cp into rootfs.
+  inner_cfg_tmp="$work_dir/inner-grub.cfg"
+  y700_write_inner_grub_cfg "$inner_cfg_tmp" \
     "$DTB_NAME" \
     "$generated_rootargs" \
     "$STABLEARGS" \
     "$BOOT_PARTLABEL"
+  sudo cp -a "$inner_cfg_tmp" "$rootfs_mount/boot/grub/grub.cfg"
   sudo umount -l "$rootfs_mount" 2>/dev/null || true
 fi
 
