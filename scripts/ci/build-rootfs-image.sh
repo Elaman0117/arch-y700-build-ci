@@ -73,6 +73,8 @@ Environment inputs:
   APPLY_Y700_FIRMWARE_FIXES  copy/verify Y700 firmware compatibility paths, default: 1
   APPLY_Y700_AUDIO_POLICY_FIXES
                              install Y700 WirePlumber ALSA policy, default: 1
+  SDDM_AUTOLOGIN             enable SDDM autologin for DEFAULT_USER_NAME, default: 0
+  SDDM_AUTOLOGIN_SESSION     SDDM session desktop name, default: plasma
   MKINITCPIO_PRESETS         default: linux (matches /etc/mkinitcpio.d/linux.preset)
   MKINITCPIO_MODULES         default: "f2fs ext4 qcom_qmp_phy qcom_snps_femto_v2"
   MKINITCPIO_HOOKS           default: "base udev block autodetect keyboard keymap modconf filesystems fsck"
@@ -123,6 +125,8 @@ DESKTOP_ENV=${DESKTOP_ENV:-plasma-desktop}
 INSTALL_GNOME_SNAPSHOT=${INSTALL_GNOME_SNAPSHOT:-1}
 APPLY_Y700_FIRMWARE_FIXES=${APPLY_Y700_FIRMWARE_FIXES:-1}
 APPLY_Y700_AUDIO_POLICY_FIXES=${APPLY_Y700_AUDIO_POLICY_FIXES:-1}
+SDDM_AUTOLOGIN=${SDDM_AUTOLOGIN:-0}
+SDDM_AUTOLOGIN_SESSION=${SDDM_AUTOLOGIN_SESSION:-plasma}
 BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-1}
 TB321FU_GPU_SENSOR_SOURCE_DIR=${TB321FU_GPU_SENSOR_SOURCE_DIR:-}
 TB321FU_GPU_SENSOR_BUILD_JOBS=${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}
@@ -248,6 +252,79 @@ CONF
   grep -q 'api.acp.auto-profile = true' "$conf" || ci_die "Y700 ALSA policy missing auto-profile=true"
   grep -q 'api.acp.auto-port = true' "$conf" || ci_die "Y700 ALSA policy missing auto-port=true"
   grep -q 'api.alsa.split-enable = false' "$conf" || ci_die "Y700 ALSA policy missing split-enable=false"
+}
+
+apply_sddm_autologin() {
+  local root=$1
+  local conf_dir="$root/etc/sddm.conf.d"
+  local conf="$conf_dir/zz-tb321fu-autologin.conf"
+  local session=${SDDM_AUTOLOGIN_SESSION%.desktop}
+
+  rm -f "$conf" "$conf_dir/30-autologin.conf" "$conf_dir/10-y700-autologin.conf"
+
+  if ! ci_bool "$SDDM_AUTOLOGIN"; then
+    ci_log "SDDM autologin disabled"
+    return 0
+  fi
+
+  ci_log "enabling SDDM autologin for $DEFAULT_USER_NAME"
+  install -d -m 0755 "$conf_dir"
+  cat > "$conf" <<CONF
+[Autologin]
+User=$DEFAULT_USER_NAME
+Session=$session
+Relogin=false
+CONF
+  chmod 0644 "$conf"
+  chown 0:0 "$conf" 2>/dev/null || true
+
+  grep -q "^User=$DEFAULT_USER_NAME$" "$conf" || ci_die "SDDM autologin user was not written"
+  grep -q "^Session=$session$" "$conf" || ci_die "SDDM autologin session was not written"
+}
+
+apply_tb321fu_legacy_cleanup() {
+  local root=$1
+
+  ci_log "removing legacy y700 sensor and haptics glue that conflicts with TB321FU packages"
+  rm -f \
+    "$root/etc/systemd/system/iio-sensor-proxy.service.d/10-y700-ssc.conf" \
+    "$root/etc/systemd/system/y700-sns-init.service" \
+    "$root/etc/systemd/system/y700-aw86937-haptics.service" \
+    "$root/etc/udev/rules.d/90-y700-haptics.rules" \
+    "$root/usr/local/libexec/y700-iio-sensor-proxy" \
+    "$root/usr/local/sbin/y700-aw86937-bind"
+  rm -rf \
+    "$root/usr/local/lib/y700-sns" \
+    "$root/usr/local/share/y700-sns"
+
+  if [ -d "$root/etc/systemd/system/multi-user.target.wants" ]; then
+    rm -f \
+      "$root/etc/systemd/system/multi-user.target.wants/y700-sns-init.service" \
+      "$root/etc/systemd/system/multi-user.target.wants/y700-aw86937-haptics.service"
+  fi
+
+  if [ -f "$root/usr/lib/systemd/system/qcom-sns-init.service" ]; then
+    install -d -m 0755 "$root/etc/systemd/system/multi-user.target.wants"
+    ln -sfn /usr/lib/systemd/system/qcom-sns-init.service \
+      "$root/etc/systemd/system/multi-user.target.wants/qcom-sns-init.service"
+  fi
+  if [ -f "$root/usr/lib/systemd/system/tb321fu-haptics.service" ]; then
+    install -d -m 0755 "$root/etc/systemd/system/multi-user.target.wants"
+    ln -sfn /usr/lib/systemd/system/tb321fu-haptics.service \
+      "$root/etc/systemd/system/multi-user.target.wants/tb321fu-haptics.service"
+  fi
+
+  if [ -x "$root/usr/libexec/iio-sensor-proxy" ]; then
+    install -d -m 0755 "$root/usr/share/dbus-1/system-services"
+    cat > "$root/usr/share/dbus-1/system-services/net.hadess.SensorProxy.service" <<'DBUS_SERVICE'
+[D-BUS Service]
+Name=net.hadess.SensorProxy
+Exec=/usr/libexec/iio-sensor-proxy
+User=root
+SystemdService=iio-sensor-proxy.service
+DBUS_SERVICE
+    chmod 0644 "$root/usr/share/dbus-1/system-services/net.hadess.SensorProxy.service"
+  fi
 }
 
 # Build and install the TB321FU Adreno GPU KSystemStats plugin inside the
@@ -701,6 +778,8 @@ if [ -n "${OVERLAY_DIR:-}" ]; then
 fi
 
 # --- Y700-specific fixes ---------------------------------------------------
+apply_sddm_autologin "$rootfs_dir"
+apply_tb321fu_legacy_cleanup "$rootfs_dir"
 if ci_bool "$APPLY_Y700_FIRMWARE_FIXES"; then
   apply_y700_firmware_fixes "$rootfs_dir"
 fi
@@ -756,6 +835,8 @@ build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
 install_gnome_snapshot=$INSTALL_GNOME_SNAPSHOT
 apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
+sddm_autologin=$SDDM_AUTOLOGIN
+sddm_autologin_session=$SDDM_AUTOLOGIN_SESSION
 mkinitcpio_presets=$MKINITCPIO_PRESETS
 mkinitcpio_modules=$MKINITCPIO_MODULES
 mkinitcpio_hooks=$MKINITCPIO_HOOKS
