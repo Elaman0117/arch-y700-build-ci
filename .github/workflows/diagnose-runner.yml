@@ -1,0 +1,36 @@
+name: Diagnose Runner Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Kernel version
+        run: uname -a
+
+      - name: Available filesystems
+        run: |
+          echo "=== /proc/filesystems ==="
+          cat /proc/filesystems
+          echo ""
+          echo "=== Try modprobe f2fs ==="
+          sudo modprobe f2fs 2>&1 || echo "modprobe f2fs FAILED (exit $?)"
+          echo ""
+          echo "=== /proc/filesystems after modprobe ==="
+          cat /proc/filesystems
+          echo ""
+          echo "=== Check for f2fs.ko in /lib/modules ==="
+          find /lib/modules/$(uname -r) -name 'f2fs*' 2>/dev/null || echo "no f2fs module found"
+          echo ""
+          echo "=== mkfs.f2fs version ==="
+          mkfs.f2fs -V 2>&1 || true
+          echo ""
+          echo "=== Try creating a small f2fs image and mounting ==="
+          truncate -s 256M /tmp/test-f2fs.img
+          sudo mkfs.f2fs -f /tmp/test-f2fs.img
+          sudo mkdir -p /mnt/test-f2fs
+          sudo mount -o loop /tmp/test-f2fs.img /mnt/test-f2fs && echo "MOUNT OK" || echo "MOUNT FAILED (exit $?)"
+          sudo umount /mnt/test-f2fs 2>/dev/null || true
+          rm -f /tmp/test-f2fs.img
