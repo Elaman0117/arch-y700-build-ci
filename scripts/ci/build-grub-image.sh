@@ -140,22 +140,31 @@ fi
 # --- Resolve kernel artifact archive (provides Image + DTB) -----------------
 if [ -n "${KERNEL_ARTIFACT_ARCHIVE:-}" ]; then
   archive="$work_dir/kernel-artifacts.archive"
-  ci_download "$KERNEL_ARTIFACT_ARCHIVE" "$archive"
-  ci_extract_archive "$archive" "$work_dir/kernel-artifacts"
-  DTB_FILE=${DTB_FILE:-$(find "$work_dir/kernel-artifacts" -type f -name "$DTB_NAME" | head -n1 || true)}
-  KERNEL_CONFIG=${KERNEL_CONFIG:-$(find "$work_dir/kernel-artifacts" -type f -name kernel.config | head -n1 || true)}
-  if [ -z "$FALLBACK_KERNEL_PATH" ]; then
-    FALLBACK_KERNEL_PATH=$(find "$work_dir/kernel-artifacts" -type f -name Image | head -n1 || true)
+  if curl -fL --retry 3 --retry-delay 2 -o "$archive" "$KERNEL_ARTIFACT_ARCHIVE" 2>/dev/null; then
+    ci_extract_archive "$archive" "$work_dir/kernel-artifacts"
+    DTB_FILE=${DTB_FILE:-$(find "$work_dir/kernel-artifacts" -type f -name "$DTB_NAME" | head -n1 || true)}
+    KERNEL_CONFIG=${KERNEL_CONFIG:-$(find "$work_dir/kernel-artifacts" -type f -name kernel.config | head -n1 || true)}
+    if [ -z "$FALLBACK_KERNEL_PATH" ]; then
+      FALLBACK_KERNEL_PATH=$(find "$work_dir/kernel-artifacts" -type f -name Image | head -n1 || true)
+    fi
+  else
+    log "WARNING: KERNEL_ARTIFACT_ARCHIVE download failed; will try to extract DTB from rootfs image"
   fi
 fi
 
 if [ -n "${BOOTAA64_EFI_URL:-}" ]; then
   BOOTAA64_EFI="$work_dir/BOOTAA64.EFI"
-  ci_download "$BOOTAA64_EFI_URL" "$BOOTAA64_EFI"
+  if ! curl -fL --retry 3 --retry-delay 2 -o "$BOOTAA64_EFI" "$BOOTAA64_EFI_URL" 2>/dev/null; then
+    log "WARNING: BOOTAA64_EFI_URL download failed; continuing without it"
+    BOOTAA64_EFI=
+  fi
 fi
 if [ -n "${QCOMRAMP_EFI_URL:-}" ]; then
   QCOMRAMP_EFI="$work_dir/QCOMRAMP.EFI"
-  ci_download "$QCOMRAMP_EFI_URL" "$QCOMRAMP_EFI"
+  if ! curl -fL --retry 3 --retry-delay 2 -o "$QCOMRAMP_EFI" "$QCOMRAMP_EFI_URL" 2>/dev/null; then
+    log "WARNING: QCOMRAMP_EFI_URL download failed; continuing without it"
+    QCOMRAMP_EFI=
+  fi
 fi
 
 # --- Extract fallback kernel from rootfs image if not given explicitly ------
@@ -185,12 +194,21 @@ if ci_bool "$INCLUDE_FALLBACK_KERNEL"; then
   fi
 fi
 
-[ -n "${DTB_FILE:-}" ] && [ -f "$DTB_FILE" ] || die "DTB_FILE is required (set DTB_FILE or KERNEL_ARTIFACT_ARCHIVE)"
-DTB_NAME=${DTB_NAME:-$(basename "$DTB_FILE")}
+# DTB is optional — if missing, the GRUB config will reference /boot/dtbs/ on
+# the rootfs instead. BOOTAA64_EFI is also optional if you have a template.
+if [ -n "${DTB_FILE:-}" ] && [ -f "$DTB_FILE" ]; then
+  DTB_NAME=${DTB_NAME:-$(basename "$DTB_FILE")}
+  have_dtb=1
+else
+  have_dtb=0
+  log "WARNING: no DTB_FILE available; GRUB config will reference /boot/dtbs/$DTB_NAME on rootfs"
+fi
 if [ -n "$BOOT_TEMPLATE_IMAGE" ]; then
   : # BOOTAA64_EFI may be optional with template
 else
-  [ -n "${BOOTAA64_EFI:-}" ] && [ -f "$BOOTAA64_EFI" ] || die "BOOTAA64_EFI or BOOTAA64_EFI_URL is required without BOOT_TEMPLATE_IMAGE"
+  if [ -z "${BOOTAA64_EFI:-}" ] || [ ! -f "$BOOTAA64_EFI" ]; then
+    log "WARNING: no BOOTAA64_EFI available; FAT image will have no standard UEFI entry (only QCOMRAMP if present)"
+  fi
 fi
 
 # --- Compute rootargs ------------------------------------------------------
@@ -219,20 +237,26 @@ fi
 if [ -n "${BOOTAA64_EFI:-}" ] && [ -f "$BOOTAA64_EFI" ]; then
   cp -a "$BOOTAA64_EFI" "$payload_dir/EFI/BOOT/BOOTAA64.EFI"
 fi
-cp -a "$DTB_FILE" "$payload_dir/dtb/$DTB_NAME"
-# Some bootloader configurations expect a platform.dtb alias.
-cp -a "$DTB_FILE" "$payload_dir/dtb/platform.dtb"
+if [ "$have_dtb" = 1 ]; then
+  cp -a "$DTB_FILE" "$payload_dir/dtb/$DTB_NAME"
+  # Some bootloader configurations expect a platform.dtb alias.
+  cp -a "$DTB_FILE" "$payload_dir/dtb/platform.dtb"
+fi
 if [ -n "${KERNEL_CONFIG:-}" ] && [ -f "$KERNEL_CONFIG" ]; then
   cp -a "$KERNEL_CONFIG" "$payload_dir/kernel.config"
 fi
 
 # Stage the fallback kernel + initramfs into the FAT payload.
 if ci_bool "$INCLUDE_FALLBACK_KERNEL"; then
-  [ -n "$FALLBACK_KERNEL_PATH" ] && [ -f "$FALLBACK_KERNEL_PATH" ] || die "INCLUDE_FALLBACK_KERNEL=1 but FALLBACK_KERNEL_PATH is missing"
-  [ -n "$FALLBACK_INITRAMFS_PATH" ] && [ -f "$FALLBACK_INITRAMFS_PATH" ] || die "INCLUDE_FALLBACK_KERNEL=1 but FALLBACK_INITRAMFS_PATH is missing"
-  log "staging fallback kernel: $(basename "$FALLBACK_KERNEL_PATH") + $(basename "$FALLBACK_INITRAMFS_PATH")"
-  cp -a "$FALLBACK_KERNEL_PATH" "$payload_dir/vmlinuz-fallback"
-  cp -a "$FALLBACK_INITRAMFS_PATH" "$payload_dir/initramfs-fallback.img"
+  if [ -n "$FALLBACK_KERNEL_PATH" ] && [ -f "$FALLBACK_KERNEL_PATH" ] && \
+     [ -n "$FALLBACK_INITRAMFS_PATH" ] && [ -f "$FALLBACK_INITRAMFS_PATH" ]; then
+    log "staging fallback kernel: $(basename "$FALLBACK_KERNEL_PATH") + $(basename "$FALLBACK_INITRAMFS_PATH")"
+    cp -a "$FALLBACK_KERNEL_PATH" "$payload_dir/vmlinuz-fallback"
+    cp -a "$FALLBACK_INITRAMFS_PATH" "$payload_dir/initramfs-fallback.img"
+  else
+    log "WARNING: INCLUDE_FALLBACK_KERNEL=1 but fallback kernel/initramfs not available; skipping"
+    INCLUDE_FALLBACK_KERNEL=0
+  fi
 fi
 
 # Build or copy QCOMRAMP.EFI for the rescue-only direct boot path.
@@ -297,8 +321,12 @@ if [ -n "$BOOT_TEMPLATE_IMAGE" ]; then
   mdir -i "$boot_img" ::/EFI/BOOT >/dev/null
   mdir -i "$boot_img" ::/dtb >/dev/null
   mdir -i "$boot_img" ::/boot/grub >/dev/null
-  mcopy -o -i "$boot_img" "$payload_dir/dtb/$DTB_NAME" "::/dtb/$DTB_NAME"
-  mcopy -o -i "$boot_img" "$payload_dir/dtb/platform.dtb" ::/dtb/platform.dtb
+  if [ -f "$payload_dir/dtb/$DTB_NAME" ]; then
+    mcopy -o -i "$boot_img" "$payload_dir/dtb/$DTB_NAME" "::/dtb/$DTB_NAME"
+  fi
+  if [ -f "$payload_dir/dtb/platform.dtb" ]; then
+    mcopy -o -i "$boot_img" "$payload_dir/dtb/platform.dtb" ::/dtb/platform.dtb
+  fi
   if [ -f "$payload_dir/EFI/BOOT/BOOTAA64.EFI" ]; then
     mcopy -o -i "$boot_img" "$payload_dir/EFI/BOOT/BOOTAA64.EFI" ::/EFI/BOOT/BOOTAA64.EFI
   fi
@@ -308,7 +336,7 @@ if [ -n "$BOOT_TEMPLATE_IMAGE" ]; then
   if [ -f "$payload_dir/EFI/BOOT/$QCOMRAMP_CFG_NAME" ]; then
     mcopy -o -i "$boot_img" "$payload_dir/EFI/BOOT/$QCOMRAMP_CFG_NAME" "::/EFI/BOOT/$QCOMRAMP_CFG_NAME"
   fi
-  if ci_bool "$INCLUDE_FALLBACK_KERNEL"; then
+  if ci_bool "$INCLUDE_FALLBACK_KERNEL" && [ -f "$payload_dir/vmlinuz-fallback" ]; then
     mcopy -o -i "$boot_img" "$payload_dir/vmlinuz-fallback" ::/vmlinuz-fallback
     mcopy -o -i "$boot_img" "$payload_dir/initramfs-fallback.img" ::/initramfs-fallback.img
   fi
@@ -332,10 +360,22 @@ else
     "$payload_dir/BOOT-INFO.txt" \
     "$payload_dir/SHA256SUMS.txt" \
     ::/
-  mcopy -i "$boot_img" "$payload_dir/dtb/$DTB_NAME" "::/dtb/$DTB_NAME"
-  mcopy -i "$boot_img" "$payload_dir/dtb/platform.dtb" ::/dtb/platform.dtb
-  mcopy -i "$boot_img" "$payload_dir/EFI/BOOT/"* ::/EFI/BOOT/
-  if ci_bool "$INCLUDE_FALLBACK_KERNEL"; then
+  if [ -f "$payload_dir/dtb/$DTB_NAME" ]; then
+    mcopy -i "$boot_img" "$payload_dir/dtb/$DTB_NAME" "::/dtb/$DTB_NAME"
+  fi
+  if [ -f "$payload_dir/dtb/platform.dtb" ]; then
+    mcopy -i "$boot_img" "$payload_dir/dtb/platform.dtb" ::/dtb/platform.dtb
+  fi
+  if [ -f "$payload_dir/EFI/BOOT/BOOTAA64.EFI" ]; then
+    mcopy -i "$boot_img" "$payload_dir/EFI/BOOT/BOOTAA64.EFI" ::/EFI/BOOT/BOOTAA64.EFI
+  fi
+  if [ -f "$payload_dir/EFI/BOOT/$Y700_DIRECT_BOOT_EFI_NAME" ]; then
+    mcopy -i "$boot_img" "$payload_dir/EFI/BOOT/$Y700_DIRECT_BOOT_EFI_NAME" ::/EFI/BOOT/
+  fi
+  if [ -f "$payload_dir/EFI/BOOT/$QCOMRAMP_CFG_NAME" ]; then
+    mcopy -i "$boot_img" "$payload_dir/EFI/BOOT/$QCOMRAMP_CFG_NAME" ::/EFI/BOOT/
+  fi
+  if ci_bool "$INCLUDE_FALLBACK_KERNEL" && [ -f "$payload_dir/vmlinuz-fallback" ]; then
     mcopy -i "$boot_img" "$payload_dir/vmlinuz-fallback" ::/vmlinuz-fallback
     mcopy -i "$boot_img" "$payload_dir/initramfs-fallback.img" ::/initramfs-fallback.img
   fi
