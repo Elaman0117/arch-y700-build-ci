@@ -22,7 +22,7 @@ on:
           PACMAN_MIRROR=http://mirror.archlinuxarm.org
           ARCH_LINUXARM_REPO=$arch/$repo
           ROOTFS_IMAGE_SIZE=20G
-          ROOTFS_FSTYPE=f2fs
+          ROOTFS_FSTYPE=ext4
           ROOTFS_F2FS_OPTIONS=-O extra_attr,inode_checksum,sb_checksum,compression
           ROOTFS_UUID=
           ROOTFS_LABEL=Y700ARCH

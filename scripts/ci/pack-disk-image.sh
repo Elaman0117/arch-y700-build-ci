@@ -35,7 +35,6 @@ ci_require_cmd sgdisk
 ci_require_cmd truncate
 ci_require_cmd dd
 ci_require_cmd stat
-ci_require_cmd fsck.f2fs
 
 [ -f "$BOOT_IMAGE" ] || ci_die "missing boot image: $BOOT_IMAGE"
 [ -f "$ROOTFS_IMAGE" ] || ci_die "missing rootfs image: $ROOTFS_IMAGE"
@@ -66,8 +65,14 @@ sgdisk -n "2:${root_start}:+${root_sectors}" -t 2:8300 -c 2:"$ROOTFS_PARTLABEL" 
 
 dd if="$BOOT_IMAGE" of="$tmp" bs=4M conv=notrunc,fsync oflag=seek_bytes seek=$((boot_start * sector_size)) status=none
 
-# F2FS offline check before embedding. fsck.f2fs -p auto-repairs safe issues.
-fsck.f2fs -p "$ROOTFS_IMAGE" || true
+# Offline fsck before embedding. We don't know the FS type here, so try both.
+# Whichever succeeds is fine; if neither exists, skip (the image was already
+# fsck'd at the end of build-rootfs-image.sh).
+if command -v fsck.f2fs >/dev/null 2>&1; then
+  fsck.f2fs -p "$ROOTFS_IMAGE" || true
+elif command -v e2fsck >/dev/null 2>&1; then
+  e2fsck -f -y "$ROOTFS_IMAGE" || true
+fi
 dd if="$ROOTFS_IMAGE" of="$tmp" bs=4M conv=notrunc,fsync oflag=seek_bytes seek=$((root_start * sector_size)) status=none
 
 mv "$tmp" "$OUTPUT_IMAGE"

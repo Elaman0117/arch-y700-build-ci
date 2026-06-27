@@ -28,7 +28,7 @@ Usage: $(basename "$0")
 Build an Arch Linux ARM F2FS rootfs image for Lenovo Y700 TB321FU.
 
 Required host tools: pacman (or chroot into the extracted tarball), mount,
-chroot, mkfs.f2fs, f2fs-tools, rsync, curl, sha256sum.
+chroot, mkfs (f2fs or ext4 depending on ROOTFS_FSTYPE), rsync, curl, sha256sum.
 
 Environment inputs:
   OUTPUT_DIR                 default: out/ci-rootfs
@@ -39,7 +39,9 @@ Environment inputs:
   PACMAN_MIRROR              default: http://mirror.archlinuxarm.org
   ARCH_LINUXARM_REPO         default: \$arch/\$repo (ALA mirror path layout)
   ROOTFS_IMAGE_SIZE          default: 20G
-  ROOTFS_FSTYPE              default: f2fs (only f2fs is supported by this script)
+  ROOTFS_FSTYPE              default: ext4 (GitHub-hosted runners do not ship
+                             f2fs kernel modules; use f2fs only on self-hosted
+                             runners or locally). Supported: ext4, f2fs.
   ROOTFS_F2FS_OPTIONS        extra mkfs.f2fs options, default: -O extra_attr,inode_checksum,sb_checksum,compression
   ROOTFS_UUID                optional F2FS UUID
   ROOTFS_LABEL               default: Y700ARCH
@@ -86,7 +88,6 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exit 0
 fi
 
-ci_require_cmd mkfs.f2fs
 ci_require_cmd mount
 ci_require_cmd umount
 ci_require_cmd chroot
@@ -103,7 +104,7 @@ ARCH_LINUXARM_REPO=${ARCH_LINUXARM_REPO:-'$arch/$repo'}
 OUTPUT_PREFIX=${OUTPUT_PREFIX:-arch-y700-armv8}
 OUTPUT_DIR=${OUTPUT_DIR:-out/ci-rootfs}
 ROOTFS_IMAGE_SIZE=${ROOTFS_IMAGE_SIZE:-20G}
-ROOTFS_FSTYPE=${ROOTFS_FSTYPE:-f2fs}
+ROOTFS_FSTYPE=${ROOTFS_FSTYPE:-ext4}
 ROOTFS_F2FS_OPTIONS=${ROOTFS_F2FS_OPTIONS:--O extra_attr,inode_checksum,sb_checksum,compression}
 ROOTFS_UUID=${ROOTFS_UUID:-}
 ROOTFS_LABEL=${ROOTFS_LABEL:-Y700ARCH}
@@ -133,7 +134,10 @@ COMPRESS=${COMPRESS:-7z}
 CHUNK_SIZE=${CHUNK_SIZE:-1500m}
 KEEP_RAW_IMAGE=${KEEP_RAW_IMAGE:-0}
 
-[ "$ROOTFS_FSTYPE" = f2fs ] || ci_die "this script only supports ROOTFS_FSTYPE=f2fs; got $ROOTFS_FSTYPE"
+case "$ROOTFS_FSTYPE" in
+  ext4|f2fs) ;;
+  *) ci_die "unsupported ROOTFS_FSTYPE=$ROOTFS_FSTYPE; only ext4 and f2fs are supported" ;;
+esac
 [ "$ARCH" = aarch64 ] || [ "$ARCH" = armv8 ] || ci_die "Arch Linux ARM ships armv8 (= aarch64); got $ARCH"
 
 # Default Arch packages. Deliberately smaller than the Ubuntu PACKAGE_LIST
@@ -331,15 +335,27 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- Create the F2FS image --------------------------------------------------
-ci_log "creating F2FS image: $rootfs_img"
+# --- Create the rootfs image ------------------------------------------------
+ci_log "creating $ROOTFS_FSTYPE image: $rootfs_img"
 rm -f "$rootfs_img"
-# f2fs-tools does not let us set UUID at mkfs time; ROOTFS_UUID is applied later
-# via mount option as a no-op for now. We document it in BUILD-INFO.
 truncate -s "$ROOTFS_IMAGE_SIZE" "$rootfs_img"
-mkfs_args=(-f -l "$ROOTFS_LABEL")
-# shellcheck disable=SC2086
-mkfs.f2fs ${mkfs_args[@]} $ROOTFS_F2FS_OPTIONS "$rootfs_img" >/dev/null
+case "$ROOTFS_FSTYPE" in
+  ext4)
+    ci_require_cmd mkfs.ext4
+    mkfs_args=(-F -L "$ROOTFS_LABEL")
+    if [ -n "$ROOTFS_UUID" ]; then
+      mkfs_args+=(-U "$ROOTFS_UUID")
+    fi
+    mkfs.ext4 "${mkfs_args[@]}" "$rootfs_img" >/dev/null
+    ;;
+  f2fs)
+    ci_require_cmd mkfs.f2fs
+    mkfs_args=(-f -l "$ROOTFS_LABEL")
+    # f2fs-tools does not let us set UUID at mkfs time; ROOTFS_UUID is metadata-only.
+    # shellcheck disable=SC2086
+    mkfs.f2fs ${mkfs_args[@]} $ROOTFS_F2FS_OPTIONS "$rootfs_img" >/dev/null
+    ;;
+esac
 
 mkdir -p "$rootfs_dir"
 mount -o loop "$rootfs_img" "$rootfs_dir"
@@ -729,10 +745,16 @@ done
 umount "$rootfs_dir"
 mounted=0
 
-# F2FS offline check. fsck.f2fs is read-only by default; -p auto-repairs
-# safe inconsistencies. We do NOT use --dry-run because we want fixes applied.
-ci_log "running fsck.f2fs on rootfs image"
-fsck.f2fs -p "$rootfs_img" || true
+case "$ROOTFS_FSTYPE" in
+  ext4)
+    ci_log "running e2fsck on rootfs image"
+    e2fsck -f -y "$rootfs_img" || true
+    ;;
+  f2fs)
+    ci_log "running fsck.f2fs on rootfs image"
+    fsck.f2fs -p "$rootfs_img" || true
+    ;;
+esac
 
 # --- Checksums -------------------------------------------------------------
 ci_log "checksumming rootfs image"

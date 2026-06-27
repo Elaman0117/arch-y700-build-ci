@@ -169,7 +169,8 @@ if ci_bool "$INCLUDE_FALLBACK_KERNEL"; then
       log "mounting rootfs image to extract fallback kernel: $ROOTFS_IMAGE"
       rootfs_mount="$work_dir/rootfs-mount"
       mkdir -p "$rootfs_mount"
-      # F2FS image - needs f2fs module on host.
+      # mount auto-detects ext4/f2fs; both work on runners that have the
+      # corresponding kernel module. GitHub-hosted runners support ext4.
       mount -o loop,ro "$ROOTFS_IMAGE" "$rootfs_mount"
       FALLBACK_KERNEL_PATH=${FALLBACK_KERNEL_PATH:-"$rootfs_mount/boot/vmlinuz-linux"}
       FALLBACK_INITRAMFS_PATH=${FALLBACK_INITRAMFS_PATH:-"$rootfs_mount/boot/initramfs-linux.img"}
