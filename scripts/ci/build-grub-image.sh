@@ -171,7 +171,8 @@ if ci_bool "$INCLUDE_FALLBACK_KERNEL"; then
       mkdir -p "$rootfs_mount"
       # mount auto-detects ext4/f2fs; both work on runners that have the
       # corresponding kernel module. GitHub-hosted runners support ext4.
-      mount -o loop,ro "$ROOTFS_IMAGE" "$rootfs_mount"
+      # Needs sudo for loop device setup.
+      sudo mount -o loop,ro "$ROOTFS_IMAGE" "$rootfs_mount"
       FALLBACK_KERNEL_PATH=${FALLBACK_KERNEL_PATH:-"$rootfs_mount/boot/vmlinuz-linux"}
       FALLBACK_INITRAMFS_PATH=${FALLBACK_INITRAMFS_PATH:-"$rootfs_mount/boot/initramfs-linux.img"}
       if [ -z "$FALLBACK_KERNEL_VERSION" ] && [ -f "$rootfs_mount/usr/lib/modules/"*/modules.dep ]; then
@@ -354,7 +355,7 @@ if [ -n "${rootfs_mount:-}" ] && mountpoint -q "$rootfs_mount" 2>/dev/null; then
     "$generated_rootargs" \
     "$STABLEARGS" \
     "$BOOT_PARTLABEL"
-  umount -l "$rootfs_mount" 2>/dev/null || true
+  sudo umount -l "$rootfs_mount" 2>/dev/null || true
 fi
 
 # --- Checksums + compression ----------------------------------------------
