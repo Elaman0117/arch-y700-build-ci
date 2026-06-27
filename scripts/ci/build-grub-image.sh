@@ -185,10 +185,23 @@ if ci_bool "$INCLUDE_FALLBACK_KERNEL"; then
       # Needs sudo for loop device setup. Mount rw so we can write the
       # inner grub.cfg into /boot/grub/ on the rootfs.
       sudo mount -o loop "$ROOTFS_IMAGE" "$rootfs_mount"
-      FALLBACK_KERNEL_PATH=${FALLBACK_KERNEL_PATH:-"$rootfs_mount/boot/vmlinuz-linux"}
-      FALLBACK_INITRAMFS_PATH=${FALLBACK_INITRAMFS_PATH:-"$rootfs_mount/boot/initramfs-linux.img"}
+      # Files under /boot in the rootfs are owned by root with mode 600 for
+      # initramfs. Copy them to the work_dir (as root, then chown to user) so
+      # the rest of the script can read them without sudo.
+      fallback_kernel_src="$rootfs_mount/boot/vmlinuz-linux"
+      fallback_initramfs_src="$rootfs_mount/boot/initramfs-linux.img"
+      if [ -f "$fallback_kernel_src" ]; then
+        sudo cp -a "$fallback_kernel_src" "$work_dir/vmlinuz-linux"
+        sudo chown "$USER:$USER" "$work_dir/vmlinuz-linux"
+        FALLBACK_KERNEL_PATH=${FALLBACK_KERNEL_PATH:-"$work_dir/vmlinuz-linux"}
+      fi
+      if [ -f "$fallback_initramfs_src" ]; then
+        sudo cp -a "$fallback_initramfs_src" "$work_dir/initramfs-linux.img"
+        sudo chown "$USER:$USER" "$work_dir/initramfs-linux.img"
+        FALLBACK_INITRAMFS_PATH=${FALLBACK_INITRAMFS_PATH:-"$work_dir/initramfs-linux.img"}
+      fi
       if [ -z "$FALLBACK_KERNEL_VERSION" ] && [ -f "$rootfs_mount/usr/lib/modules/"*/modules.dep ]; then
-        FALLBACK_KERNEL_VERSION=$(basename "$(find "$rootfs_mount/usr/lib/modules" -maxdepth 1 -mindepth 1 -type d | head -n1)" 2>/dev/null || true)
+        FALLBACK_KERNEL_VERSION=$(basename "$(sudo find "$rootfs_mount/usr/lib/modules" -maxdepth 1 -mindepth 1 -type d | head -n1)" 2>/dev/null || true)
       fi
       # Defer umount until after we've copied the files.
     else
