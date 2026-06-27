@@ -37,7 +37,7 @@ Environment inputs:
   ROOTFS_TARBALL_URL         default: http://os.archlinuxarm.org/os/ArchLinuxARM-armv8-latest.tar.gz
   ROOTFS_TARBALL_PATH        optional local path; overrides URL
   PACMAN_MIRROR              default: http://mirror.archlinuxarm.org
-  ARCH_LINUXARM_REPO         default: \$repo/\$arch
+  ARCH_LINUXARM_REPO         default: \$arch/\$repo (ALA mirror path layout)
   ROOTFS_IMAGE_SIZE          default: 20G
   ROOTFS_FSTYPE              default: f2fs (only f2fs is supported by this script)
   ROOTFS_F2FS_OPTIONS        extra mkfs.f2fs options, default: -O extra_attr,inode_checksum,sb_checksum,compression
@@ -71,7 +71,7 @@ Environment inputs:
   APPLY_Y700_FIRMWARE_FIXES  copy/verify Y700 firmware compatibility paths, default: 1
   APPLY_Y700_AUDIO_POLICY_FIXES
                              install Y700 WirePlumber ALSA policy, default: 1
-  MKINITCPIO_PRESETS         default: default
+  MKINITCPIO_PRESETS         default: linux (matches /etc/mkinitcpio.d/linux.preset)
   MKINITCPIO_MODULES         default: "f2fs ext4 qcom_qmp_phy qcom_snps_femto_v2"
   MKINITCPIO_HOOKS           default: "base udev block autodetect keyboard keymap modconf filesystems fsck"
   CLEAN_PACMAN_CACHE         default: 1
@@ -99,7 +99,7 @@ ARCH=${ARCH:-aarch64}
 ROOTFS_TARBALL_URL=${ROOTFS_TARBALL_URL:-http://os.archlinuxarm.org/os/ArchLinuxARM-armv8-latest.tar.gz}
 ROOTFS_TARBALL_PATH=${ROOTFS_TARBALL_PATH:-}
 PACMAN_MIRROR=${PACMAN_MIRROR:-http://mirror.archlinuxarm.org}
-ARCH_LINUXARM_REPO=${ARCH_LINUXARM_REPO:-'$repo/$arch'}
+ARCH_LINUXARM_REPO=${ARCH_LINUXARM_REPO:-'$arch/$repo'}
 OUTPUT_PREFIX=${OUTPUT_PREFIX:-arch-y700-armv8}
 OUTPUT_DIR=${OUTPUT_DIR:-out/ci-rootfs}
 ROOTFS_IMAGE_SIZE=${ROOTFS_IMAGE_SIZE:-20G}
@@ -125,7 +125,7 @@ APPLY_Y700_AUDIO_POLICY_FIXES=${APPLY_Y700_AUDIO_POLICY_FIXES:-1}
 BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-1}
 TB321FU_GPU_SENSOR_SOURCE_DIR=${TB321FU_GPU_SENSOR_SOURCE_DIR:-}
 TB321FU_GPU_SENSOR_BUILD_JOBS=${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}
-MKINITCPIO_PRESETS=${MKINITCPIO_PRESETS:-default}
+MKINITCPIO_PRESETS=${MKINITCPIO_PRESETS:-linux}
 MKINITCPIO_MODULES=${MKINITCPIO_MODULES:-"f2fs ext4 qcom_qmp_phy qcom_snps_femto_v2"}
 MKINITCPIO_HOOKS=${MKINITCPIO_HOOKS:-"base udev block autodetect keyboard keymap modconf filesystems fsck"}
 CLEAN_PACMAN_CACHE=${CLEAN_PACMAN_CACHE:-1}

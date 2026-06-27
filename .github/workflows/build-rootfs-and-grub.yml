@@ -20,7 +20,7 @@ on:
           ARCH=aarch64
           ROOTFS_TARBALL_URL=http://os.archlinuxarm.org/os/ArchLinuxARM-armv8-latest.tar.gz
           PACMAN_MIRROR=http://mirror.archlinuxarm.org
-          ARCH_LINUXARM_REPO=$repo/$arch
+          ARCH_LINUXARM_REPO=$arch/$repo
           ROOTFS_IMAGE_SIZE=20G
           ROOTFS_FSTYPE=f2fs
           ROOTFS_F2FS_OPTIONS=-O extra_attr,inode_checksum,sb_checksum,compression
@@ -59,7 +59,7 @@ on:
           INSTALL_GNOME_SNAPSHOT=1
           APPLY_Y700_FIRMWARE_FIXES=1
           APPLY_Y700_AUDIO_POLICY_FIXES=1
-          MKINITCPIO_PRESETS=default
+          MKINITCPIO_PRESETS=linux
           MKINITCPIO_MODULES=f2fs ext4 qcom_qmp_phy qcom_snps_femto_v2
           MKINITCPIO_HOOKS=base udev block autodetect keyboard keymap modconf filesystems fsck
           CLEAN_PACMAN_CACHE=1
