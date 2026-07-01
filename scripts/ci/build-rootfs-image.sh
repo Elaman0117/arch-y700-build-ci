@@ -123,6 +123,8 @@ LOCALES=${LOCALES:-$'en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8'}
 PACKAGE_LIST=${PACKAGE_LIST:-}
 DESKTOP_ENV=${DESKTOP_ENV:-plasma-desktop}
 INSTALL_GNOME_SNAPSHOT=${INSTALL_GNOME_SNAPSHOT:-1}
+INSTALL_FCITX5_CHINESE=${INSTALL_FCITX5_CHINESE:-1}
+FCITX5_CHINESE_PACKAGES=${FCITX5_CHINESE_PACKAGES:-"noto-fonts-cjk fcitx5 fcitx5-chinese-addons fcitx5-pinyin-zhwiki fcitx5-configtool fcitx5-gtk fcitx5-qt fcitx5-wayland"}
 APPLY_Y700_FIRMWARE_FIXES=${APPLY_Y700_FIRMWARE_FIXES:-1}
 APPLY_Y700_AUDIO_POLICY_FIXES=${APPLY_Y700_AUDIO_POLICY_FIXES:-1}
 SDDM_AUTOLOGIN=${SDDM_AUTOLOGIN:-0}
@@ -152,6 +154,9 @@ if [ -n "$DESKTOP_ENV" ]; then
 fi
 if ci_bool "$INSTALL_GNOME_SNAPSHOT"; then
   PACKAGE_LIST="$PACKAGE_LIST snapshot"
+fi
+if ci_bool "$INSTALL_FCITX5_CHINESE"; then
+  PACKAGE_LIST="$PACKAGE_LIST $FCITX5_CHINESE_PACKAGES"
 fi
 PACKAGE_LIST="$default_packages $PACKAGE_LIST"
 
@@ -504,8 +509,87 @@ fi
 
 pacman -Syu --noconfirm --needed $PACKAGE_LIST
 
+# --- Fcitx 5 Chinese input method (optional) ---
+if ci_bool "$INSTALL_FCITX5_CHINESE"; then
+  # Verify required packages actually installed (Arch may rename packages).
+  for pkg in fcitx5 fcitx5-chinese-addons noto-fonts-cjk; do
+    pacman -Qi "$pkg" >/dev/null 2>&1 || {
+      echo "required Fcitx 5 Chinese input package missing: $pkg" >&2
+      exit 1
+    }
+  done
+
+  install -d -m 0755 \
+    /etc/environment.d \
+    /etc/skel/.config/environment.d \
+    /etc/skel/.config/autostart \
+    /etc/skel/.config/fcitx5 \
+    /etc/skel/.config/plasma-workspace/env
+
+  cat > /etc/environment.d/90-fcitx5.conf <<'FCITX5_ENV'
+GTK_IM_MODULE=fcitx
+QT_IM_MODULE=fcitx
+XMODIFIERS=@im=fcitx
+SDL_IM_MODULE=fcitx
+INPUT_METHOD=fcitx
+FCITX5_ENV
+  chmod 0644 /etc/environment.d/90-fcitx5.conf
+  cp -a /etc/environment.d/90-fcitx5.conf /etc/skel/.config/environment.d/90-fcitx5.conf
+
+  cat > /etc/skel/.config/plasma-workspace/env/fcitx5.sh <<'FCITX5_PLASMA_ENV'
+#!/bin/sh
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
+export XMODIFIERS=@im=fcitx
+export SDL_IM_MODULE=fcitx
+export INPUT_METHOD=fcitx
+FCITX5_PLASMA_ENV
+  chmod 0755 /etc/skel/.config/plasma-workspace/env/fcitx5.sh
+
+  cat > /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop <<'FCITX5_AUTOSTART'
+[Desktop Entry]
+Name=Fcitx 5
+GenericName=Input Method
+Comment=Start Fcitx 5 input method
+Exec=fcitx5 -d --replace
+Icon=org.fcitx.Fcitx5
+Terminal=false
+Type=Application
+Categories=System;Utility;
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
+FCITX5_AUTOSTART
+  chmod 0644 /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop
+
+  cat > /etc/skel/.config/fcitx5/profile <<'FCITX5_PROFILE'
+[Groups/0]
+# Group Name
+Name=Default
+# Layout
+Default Layout=us
+# Default Input Method
+DefaultIM=pinyin
+
+[Groups/0/Items/0]
+# Name
+Name=keyboard-us
+# Layout
+Layout=
+
+[Groups/0/Items/1]
+# Name
+Name=pinyin
+# Layout
+Layout=
+
+[GroupOrder]
+0=Default
+FCITX5_PROFILE
+  chmod 0644 /etc/skel/.config/fcitx5/profile
+fi
+
 # --- Plasma Mobile / desktop skeleton config (same content as Ubuntu build) ---
-install -d -m 0755 /etc/skel/.config
+install -d -m 0755 /etc/xdg /etc/skel/.config
 cat > /etc/skel/.config/plasmakeyboardrc <<'PLASMAKEYBOARDRC'
 [General]
 enabledLocales=en_US
@@ -514,6 +598,16 @@ vibrationEnabled=true
 vibrationMs=20
 PLASMAKEYBOARDRC
 chmod 0644 /etc/skel/.config/plasmakeyboardrc
+
+# KWin Wayland virtual keyboard config: keep Plasma Keyboard enabled so the
+# touchscreen keyboard and Fcitx can coexist.
+cat > /etc/xdg/kwinrc <<'KWINRC'
+[Wayland]
+InputMethod=/usr/share/applications/org.kde.plasma.keyboard.desktop
+VirtualKeyboardEnabled=true
+KWINRC
+chmod 0644 /etc/xdg/kwinrc
+cp -a /etc/xdg/kwinrc /etc/skel/.config/kwinrc
 
 cat > /etc/skel/.config/kwinoutputconfig.json <<'KWINOUTPUTCONFIG'
 [
@@ -574,6 +668,27 @@ if ! id -u "$DEFAULT_USER_NAME" >/dev/null 2>&1; then
   useradd -m -G wheel -s /bin/bash "$DEFAULT_USER_NAME"
 fi
 printf '%s:%s\n' "$DEFAULT_USER_NAME" "$DEFAULT_USER_PASSWORD" | chpasswd
+
+# Copy Fcitx 5 skel config into the default user's home.
+if ci_bool "$INSTALL_FCITX5_CHINESE" && [ -d "/home/$DEFAULT_USER_NAME" ]; then
+  default_user_group=$(id -gn "$DEFAULT_USER_NAME")
+  install -d -m 0755 \
+    "/home/$DEFAULT_USER_NAME/.config" \
+    "/home/$DEFAULT_USER_NAME/.config/environment.d" \
+    "/home/$DEFAULT_USER_NAME/.config/autostart" \
+    "/home/$DEFAULT_USER_NAME/.config/fcitx5" \
+    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace" \
+    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace/env"
+  cp -a /etc/skel/.config/environment.d/90-fcitx5.conf "/home/$DEFAULT_USER_NAME/.config/environment.d/90-fcitx5.conf"
+  cp -a /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop "/home/$DEFAULT_USER_NAME/.config/autostart/org.fcitx.Fcitx5.desktop"
+  cp -a /etc/skel/.config/fcitx5/profile "/home/$DEFAULT_USER_NAME/.config/fcitx5/profile"
+  cp -a /etc/skel/.config/plasma-workspace/env/fcitx5.sh "/home/$DEFAULT_USER_NAME/.config/plasma-workspace/env/fcitx5.sh"
+  chown -R "$DEFAULT_USER_NAME:$default_user_group" \
+    "/home/$DEFAULT_USER_NAME/.config/environment.d" \
+    "/home/$DEFAULT_USER_NAME/.config/autostart" \
+    "/home/$DEFAULT_USER_NAME/.config/fcitx5" \
+    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace"
+fi
 
 case "$ROOT_PASSWORD_MODE" in
   locked)
@@ -746,6 +861,7 @@ chroot "$rootfs_dir" env -i \
   HOME=/root \
   LANG=C.UTF-8 \
   PACKAGE_LIST="$PACKAGE_LIST" \
+  INSTALL_FCITX5_CHINESE="$INSTALL_FCITX5_CHINESE" \
   DEFAULT_USER_NAME="$DEFAULT_USER_NAME" \
   DEFAULT_USER_PASSWORD="$DEFAULT_USER_PASSWORD" \
   ROOT_PASSWORD_MODE="$ROOT_PASSWORD_MODE" \
@@ -810,8 +926,9 @@ menuentry "Arch Y700 (no inner grub.cfg; using FAT fallback)" {
 }
 INNER_GRUB_PLACEHOLDER
 
-# --- Build info ------------------------------------------------------------
-cat > "$rootfs_dir/BUILD-INFO.txt" <<INFO
+# --- Build info (written to OUTPUT_DIR, not into the rootfs) ---------------
+build_info="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt"
+cat > "$build_info" <<INFO
 generated=$(date -u -Iseconds)
 distro=arch-linux-arm
 arch=$ARCH
@@ -833,6 +950,7 @@ haptics_stage_dir=${HAPTICS_STAGE_DIR:-}
 camera_stack_stage_dir=${CAMERA_STACK_STAGE_DIR:-}
 build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
 install_gnome_snapshot=$INSTALL_GNOME_SNAPSHOT
+install_fcitx5_chinese=$INSTALL_FCITX5_CHINESE
 apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
 sddm_autologin=$SDDM_AUTOLOGIN
@@ -841,6 +959,13 @@ mkinitcpio_presets=$MKINITCPIO_PRESETS
 mkinitcpio_modules=$MKINITCPIO_MODULES
 mkinitcpio_hooks=$MKINITCPIO_HOOKS
 INFO
+
+# Remove any build-time metadata that should not ship inside the rootfs image.
+rm -f \
+  "$rootfs_dir/BUILD-INFO.txt" \
+  "$rootfs_dir/SHA256SUMS" \
+  "$rootfs_dir/SHA256SUMS.txt" \
+  "$rootfs_dir/Y700-ROOTFS-OVERLAY-MANIFEST.tsv"
 
 # --- Manifest --------------------------------------------------------------
 ci_log "writing manifest"
@@ -875,7 +1000,7 @@ raw_sha_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.raw.sha256"
 
 checksum_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.SHA256SUMS"
 rm -f "$checksum_file"
-( cd "$OUTPUT_DIR" && sha256sum "$(basename "$manifest")" "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")" )
+( cd "$OUTPUT_DIR" && sha256sum "$(basename "$build_info")" "$(basename "$manifest")" "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")" )
 
 # --- Compression -----------------------------------------------------------
 case "$COMPRESS" in

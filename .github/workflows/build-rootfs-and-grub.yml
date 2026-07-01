@@ -57,6 +57,7 @@ on:
           BUILD_TB321FU_GPU_SENSOR=1
           TB321FU_GPU_SENSOR_BUILD_JOBS=2
           INSTALL_GNOME_SNAPSHOT=1
+          INSTALL_FCITX5_CHINESE=1
           APPLY_Y700_FIRMWARE_FIXES=1
           APPLY_Y700_AUDIO_POLICY_FIXES=1
           SDDM_AUTOLOGIN=0
@@ -267,7 +268,7 @@ jobs:
       - name: Build rootfs image
         run: |
           set -euo pipefail
-          sudo --preserve-env=OUTPUT_PREFIX,ARCH,ROOTFS_TARBALL_URL,ROOTFS_TARBALL_PATH,PACMAN_MIRROR,ARCH_LINUXARM_REPO,ROOTFS_IMAGE_SIZE,ROOTFS_FSTYPE,ROOTFS_F2FS_OPTIONS,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,OVERLAY_DIR,PKG_ARCHIVE,PKG_DIR,SENSOR_STAGE_DIR,HAPTICS_STAGE_DIR,CAMERA_STACK_STAGE_DIR,BUILD_TB321FU_GPU_SENSOR,TB321FU_GPU_SENSOR_SOURCE_DIR,TB321FU_GPU_SENSOR_BUILD_JOBS,INSTALL_GNOME_SNAPSHOT,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,SDDM_AUTOLOGIN,SDDM_AUTOLOGIN_SESSION,MKINITCPIO_PRESETS,MKINITCPIO_MODULES,MKINITCPIO_HOOKS,CLEAN_PACMAN_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
+          sudo --preserve-env=OUTPUT_PREFIX,ARCH,ROOTFS_TARBALL_URL,ROOTFS_TARBALL_PATH,PACMAN_MIRROR,ARCH_LINUXARM_REPO,ROOTFS_IMAGE_SIZE,ROOTFS_FSTYPE,ROOTFS_F2FS_OPTIONS,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,OVERLAY_DIR,PKG_ARCHIVE,PKG_DIR,SENSOR_STAGE_DIR,HAPTICS_STAGE_DIR,CAMERA_STACK_STAGE_DIR,BUILD_TB321FU_GPU_SENSOR,TB321FU_GPU_SENSOR_SOURCE_DIR,TB321FU_GPU_SENSOR_BUILD_JOBS,INSTALL_GNOME_SNAPSHOT,INSTALL_FCITX5_CHINESE,FCITX5_CHINESE_PACKAGES,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,SDDM_AUTOLOGIN,SDDM_AUTOLOGIN_SESSION,MKINITCPIO_PRESETS,MKINITCPIO_MODULES,MKINITCPIO_HOOKS,CLEAN_PACMAN_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
             env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_STAGE_DIR="${SENSOR_STAGE_DIR:-}" HAPTICS_STAGE_DIR="${HAPTICS_STAGE_DIR:-}" CAMERA_STACK_STAGE_DIR="${CAMERA_STACK_STAGE_DIR:-}" bash scripts/ci/build-rootfs-image.sh
           sudo chown -R "$USER:$USER" out
 
@@ -346,7 +347,7 @@ jobs:
           select_release_asset() {
             local source_dir=$1
             local source_prefix=$2
-            local release_kind=$3
+            local release_name=$3
             local compress=$4
             local chunk_size=$5
             local suffix src dest
@@ -357,17 +358,17 @@ jobs:
               xz) suffix=.img.xz; src="$source_dir/$source_prefix.xz" ;;
               7z)
                 if [ -n "$chunk_size" ]; then
-                  echo "Release upload expects a single $release_kind archive; clear CHUNK_SIZE/BOOT_CHUNK_SIZE instead of using 7z volumes." >&2
+                  echo "Release upload expects a single $release_name archive; clear CHUNK_SIZE/BOOT_CHUNK_SIZE instead of using 7z volumes." >&2
                   exit 1
                 fi
                 suffix=.img.7z
                 src="$source_dir/$source_prefix.7z"
                 ;;
-              *) echo "unsupported $release_kind compression: $compress" >&2; exit 1 ;;
+              *) echo "unsupported $release_name compression: $compress" >&2; exit 1 ;;
             esac
 
-            [ -f "$src" ] || { echo "missing release $release_kind asset: $src" >&2; exit 1; }
-            dest="$release_dir/${OUTPUT_PREFIX}-${release_kind}${suffix}"
+            [ -f "$src" ] || { echo "missing release $release_name asset: $src" >&2; exit 1; }
+            dest="$release_dir/${release_name}${suffix}"
             cp -a "$src" "$dest"
           }
 
@@ -384,7 +385,7 @@ jobs:
                 continue
               fi
               echo "Splitting release asset larger than GitHub's 2GB limit: $asset ($size bytes)"
-              split -b 1900M -d -a 3 "$asset" "$asset.part-"
+              split -b 1900M -d -a 3 "$asset" "$asset."
               rm -f "$asset"
             done < <(find "$release_dir" -maxdepth 1 -type f -print0)
           }
@@ -408,7 +409,8 @@ jobs:
             echo "- Generated: \`$(date -u -Iseconds)\`"
             echo
             echo 'Password-like values are redacted in these release notes.'
-            echo 'Assets ending in `.part-NNN` are split only to satisfy the GitHub Release 2GB per-asset limit. Recombine them in lexical order before extraction, for example: `cat arch-y700-armv8-rootfs.img.7z.part-* > arch-y700-armv8-rootfs.img.7z`.'
+            echo 'The release asset names are intentionally short: `rootfs.img.7z` and `grub.img.7z`, with split rootfs parts such as `rootfs.img.7z.000` / `rootfs.img.7z.001`.'
+            echo 'Assets ending in `.NNN` are split only to satisfy the GitHub Release 2GB per-asset limit. Recombine them in lexical order before extraction, for example: `cat rootfs.img.7z.* > rootfs.img.7z`.'
             echo
             echo '## rootfs_config'
             echo '```text'
@@ -428,12 +430,16 @@ jobs:
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$notes"
+            release_id=$(gh api "repos/${GITHUB_REPOSITORY:?}/releases/tags/$RELEASE_TAG" --jq .id)
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY:?}/releases/$release_id" -F draft=false -F prerelease=false -F make_latest=true >/dev/null
             while IFS= read -r asset_name; do
               [ -n "$asset_name" ] || continue
               gh release delete-asset "$RELEASE_TAG" "$asset_name" -y || true
             done < <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
           else
-            gh release create "$RELEASE_TAG" --prerelease --title "$RELEASE_TAG" --notes-file "$notes"
+            gh release create "$RELEASE_TAG" --latest --title "$RELEASE_TAG" --notes-file "$notes"
+            release_id=$(gh api "repos/${GITHUB_REPOSITORY:?}/releases/tags/$RELEASE_TAG" --jq .id)
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY:?}/releases/$release_id" -F draft=false -F prerelease=false -F make_latest=true >/dev/null
           fi
 
           gh release upload "$RELEASE_TAG" "$release_dir"/* --clobber
